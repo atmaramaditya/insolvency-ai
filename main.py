@@ -30,6 +30,7 @@ def load_assets():
     if ml_assets["model"] is None:
         try:
             logger.info("Loading ML assets...")
+            # Ensure paths are relative for Streamlit Cloud compatibility
             ml_assets["model"] = joblib.load('deployment_assets/best_ensemble.pkl')
             ml_assets["features"] = joblib.load('deployment_assets/model_features.pkl')
             logger.info("Assets loaded successfully.")
@@ -45,32 +46,40 @@ def get_prediction(net_profit, total_debt, working_cap):
     try:
         model = ml_assets["model"]
         
-        # Determine features the model expects
+        # 1. Determine features the model expects
         try:
             expected_features = list(model.feature_names_in_)
         except AttributeError:
             expected_features = list(ml_assets["features"])
 
-        # 1. Create empty DataFrame
+        # 2. Create empty DataFrame with correct feature order
         input_df = pd.DataFrame(0.0, index=[0], columns=expected_features)
 
-        # --- CORRECTED INDENTATION SECTION ---
+        # 3. ROBUST MAPPING LOGIC
+        # Added 'Persistent EPS' and 'ROA' variations which are common in bankruptcy datasets
         mapping_targets = {
             "net_profit": [
-                " Net Income to Total Assets",         # Added variation 1
-                "Net Income to Total Assets",          # Added variation 2
-                " Net income to total assets",         # Added variation 3
-                "Net income to total assets",          # Added variation 4
-                "ROA(C) before interest and depreciation before interest", # Common in UCI dataset
-                " Net Value Per Share (A)"             # Another common one
+                " Net Income to Total Assets", 
+                "Net Income to Total Assets", 
+                "ROA(C) before interest and depreciation before interest",
+                " Persistent EPS in the Last Four Seasons",
+                "net_income_to_total_assets"
             ],
-            "total_debt": [" Debt ratio %", "Debt ratio %"],
-            "working_cap": [" Working Capital to Total Assets", "Working Capital to Total Assets"]
+            "total_debt": [
+                " Debt ratio %", 
+                "Debt ratio %", 
+                "total_debt_to_total_assets",
+                " Total debt/Total net worth"
+            ],
+            "working_cap": [
+                " Working Capital to Total Assets", 
+                "Working Capital to Total Assets", 
+                "working_capital_to_total_assets"
+            ]
         }
         
         user_inputs = {"net_profit": net_profit, "total_debt": total_debt, "working_cap": working_cap}
         
-        # Try to find which specific variation exists in your actual model
         found_cols = []
         for input_key, variations in mapping_targets.items():
             for v in variations:
@@ -79,20 +88,20 @@ def get_prediction(net_profit, total_debt, working_cap):
                     found_cols.append(v)
                     break 
 
-        # 3. Final alignment
+        # 4. Final alignment (Reindexing ensures the model gets exactly what it expects)
         input_df = input_df.reindex(columns=expected_features, fill_value=0)
 
-        # 4. Inference
-        # We use predict_proba to get the continuous risk score
+        # 5. Inference Logic
+        # We use predict_proba for the risk gauge (probability of class 1)
         probability = float(model.predict_proba(input_df)[0][1])
         prediction = 1 if probability > 0.5 else 0
 
-        # --- TERMINAL DEBUG (ADITYA: CHECK THIS) ---
+        # --- TERMINAL DEBUG (ADITYA: WATCH THIS) ---
         print("\n" + "="*40)
         print("🔍 ADITYA'S MODEL DEBUGGER")
         print(f"Mapped Columns Found: {found_cols}")
-        print(f"Slider Values -> NP: {net_profit}, Debt: {total_debt}, WC: {working_cap}")
-        print(f"FINAL RISK SCORE: {round(probability * 100, 2)}%")
+        print(f"Inputs Received -> NP: {net_profit}, Debt: {total_debt}, WC: {working_cap}")
+        print(f"Live Risk Probability: {round(probability * 100, 2)}%")
         print("="*40 + "\n")
 
         return {
@@ -123,4 +132,4 @@ async def api_predict(financials: CompanyFinancials):
     if res is None:
         raise HTTPException(status_code=500, detail="Inference Failed")
     
-    return {**res, "version": "v7-robust-mapping"}
+    return {**res, "version": "v8-production-ready"}
