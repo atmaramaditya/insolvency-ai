@@ -12,11 +12,10 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- 2. SIDEBAR (The Control Center) ---
+# --- 2. SIDEBAR ---
 with st.sidebar:
     st.title("🛡️ Risk Control Panel")
     
-    # Sensitivity Controller for Imbalanced Taiwan Data
     st.subheader("Decision Threshold")
     threshold = st.slider("Risk Sensitivity", 0.1, 0.9, 0.5, 
                           help="Lowering this catches more bankruptcies but increases false alarms.")
@@ -46,38 +45,44 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
     res = get_prediction(0, 0, 0, custom_data=df)
     
-    if res:
-        # FIX 1: Ensure Risk Score is numeric to prevent styling engine crash
-        df['Risk Score'] = pd.to_numeric(res['all_scores'], errors='coerce').fillna(0.0)
-        df['Prediction'] = ["Bankrupt" if r > threshold else "Healthy" for r in df['Risk Score']]
-        
-        st.write("### Batch Analysis Results (Preview)")
-        
-        # FIX 2: Limit data serialization to prevent Arrow Marshalling error
-        # We show the top 50 high-risk entities first
+    if res and 'all_scores' in res:
         try:
+            # FIX: Using the global pandas reference explicitly to avoid AttributeError
+            scores_raw = res.get('all_scores', [])
+            
+            # Direct conversion to ensure no nested lists interfere
+            df['Risk Score'] = pd.Series(scores_raw).apply(pd.to_numeric, errors='coerce').fillna(0.0).values
+            
+            df['Prediction'] = ["Bankrupt" if r > threshold else "Healthy" for r in df['Risk Score']]
+            
+            st.write("### Batch Analysis Results (Preview)")
+            
+            # Limit data to prevent serialization/memory errors
             preview_df = df.sort_values(by='Risk Score', ascending=False).head(50)
+            
+            # Styling
             styled_df = preview_df.style.background_gradient(subset=['Risk Score'], cmap='RdYlGn_r')
             st.dataframe(styled_df, use_container_width=True)
             
-            # Add Download Button for full dataset
+            # Download
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button("📥 Download Full Assessment Report", data=csv, file_name="insolvency_analysis.csv")
+            
         except Exception as e:
-            st.warning("Styling failed due to data scale. Showing raw preview.")
+            st.error(f"Logic Error: {e}")
             st.dataframe(df.head(50), use_container_width=True)
     else:
-        st.error("Prediction failed for the uploaded file.")
+        st.error("Prediction failed. The model backend returned an empty response.")
 
 else:
     # --- SINGLE PREDICTION LOGIC ---
     res = get_prediction(input_np, input_debt, input_wc)
     
     if res:
-        risk_score = float(res['risk_score'])
+        # Access safely
+        risk_score = float(res.get('risk_score', 0.0))
         adj_status = "Bankrupt" if risk_score > threshold else "Healthy"
         
-        # --- 5. ANALYTICS CENTER (Tabs) ---
         tab1, tab2, tab3 = st.tabs(["🎯 Risk Diagnostic", "🧠 Explainability (XAI)", "📂 Methodology"])
 
         with tab1:
@@ -108,9 +113,9 @@ else:
                 st.metric("Risk Probability", f"{risk_score:.1%}")
                 
                 if risk_score > threshold:
-                    st.error(f"**High Alert:** Above the {threshold} threshold.")
+                    st.error(f"High Risk Alert")
                 else:
-                    st.success("**Stable:** Risk within acceptable bounds.")
+                    st.success("Stable Position")
 
         with tab2:
             st.subheader("Feature Impact (Real-time XAI)")
@@ -127,13 +132,11 @@ else:
             st.subheader("Technical Documentation")
             st.markdown(f"""
             **Methodology:**
-            - **Control Theory Integration:** Applying mechatronics principles to monitor financial system stability.
-            - **Imbalance Strategy:** Utilizing a dynamic **Decision Threshold** (currently set at {threshold}) to optimize Recall for minority-class bankruptcy events.
-            - **Architecture:** Decoupled FastAPI Backend + Streamlit Frontend.
+            - Utilizing Gradient Boosting models optimized for imbalanced financial data.
+            - Real-time decision thresholding at {threshold}.
             """)
     else:
-        st.error("⚠️ Prediction Engine is offline. Check if your .pkl files exist in 'deployment_assets'.")
+        st.error("⚠️ Prediction Engine Offline.")
 
-# --- 6. FOOTER ---
 st.markdown("---")
 st.markdown("<p style='text-align: center; color: grey;'>© 2026 Aditya Atmaram | Navi Mumbai, India</p>", unsafe_allow_html=True)
