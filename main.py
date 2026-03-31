@@ -29,19 +29,46 @@ ml_assets = {"model": None, "features": None}
 
 def load_assets():
     if ml_assets["model"] is None:
-        try:
-            logger.info("Loading ML assets...")
-            # FIXED: Absolute pathing to prevent Errno 2 on Streamlit Cloud
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            model_path = os.path.join(base_path, 'deployment_assets', 'best_ensemble.pkl')
-            feature_path = os.path.join(base_path, 'deployment_assets', 'model_features.pkl')
-            
-            ml_assets["model"] = joblib.load(model_path)
-            ml_assets["features"] = joblib.load(feature_path)
-            logger.info("Assets loaded successfully.")
-        except Exception as e:
-            logger.error(f"Failed to load assets: {e}")
+        # FAIL-SAFE PATH LOGIC
+        # We check three possible locations for the assets
+        possible_paths = [
+            'deployment_assets/best_ensemble.pkl', # Relative to Root (Streamlit Cloud Default)
+            os.path.join(os.path.dirname(__file__), 'deployment_assets/best_ensemble.pkl'), # Local relative
+            '/mount/src/insolvency-ai/deployment_assets/best_ensemble.pkl' # Absolute Cloud Path
+        ]
+        
+        feature_paths = [
+            'deployment_assets/model_features.pkl',
+            os.path.join(os.path.dirname(__file__), 'deployment_assets/model_features.pkl'),
+            '/mount/src/insolvency-ai/deployment_assets/model_features.pkl'
+        ]
+
+        model_loaded = False
+        for p in possible_paths:
+            if os.path.exists(p):
+                try:
+                    ml_assets["model"] = joblib.load(p)
+                    logger.info(f"✅ Model loaded from: {p}")
+                    model_loaded = True
+                    break
+                except Exception as e:
+                    logger.error(f"Error loading pkl from {p}: {e}")
+
+        features_loaded = False
+        for fp in feature_paths:
+            if os.path.exists(fp):
+                try:
+                    ml_assets["features"] = joblib.load(fp)
+                    logger.info(f"✅ Features loaded from: {fp}")
+                    features_loaded = True
+                    break
+                except Exception as e:
+                    logger.error(f"Error loading pkl from {fp}: {e}")
+
+        if not model_loaded or not features_loaded:
+            logger.error("❌ Critical Error: Could not find deployment_assets in any known path.")
             return False
+            
     return True
 
 def get_prediction(net_profit, total_debt, working_cap):
@@ -57,33 +84,18 @@ def get_prediction(net_profit, total_debt, working_cap):
         else:
             expected_features = list(ml_assets["features"])
 
-        # 2. FIXED: Initialize with 0.5 (Neutral) instead of 0.0
-        # The Taiwan dataset features are largely ratios between 0 and 1. 
-        # Filling 92 features with 0.0 makes the company look "non-existent" to the model.
+        # 2. Taiwan Dataset Fix: Neutral Imputation (0.5)
         input_df = pd.DataFrame(0.5, index=[0], columns=expected_features)
 
-        # 3. IMPROVED MAPPING LOGIC
+        # 3. Mapping logic (Taiwan Specific Names)
         mapping_targets = {
-            "net_profit": [
-                " Net Income to Total Assets", 
-                "Net Income to Total Assets", 
-                "ROA(C) before interest and depreciation before interest"
-            ],
-            "total_debt": [
-                " Debt ratio %", 
-                "Debt ratio %", 
-                "Total debt/Total net worth"
-            ],
-            "working_cap": [
-                " Working Capital to Total Assets", 
-                "Working Capital to Total Assets"
-            ]
+            "net_profit": [" Net Income to Total Assets", "Net Income to Total Assets"],
+            "total_debt": [" Debt ratio %", "Debt ratio %"],
+            "working_cap": [" Working Capital to Total Assets", "Working Capital to Total Assets"]
         }
         
         user_inputs = {"net_profit": net_profit, "total_debt": total_debt, "working_cap": working_cap}
-        found_cols = []
-
-        # Strip whitespace from expected features for cleaner matching
+        
         clean_expected = [str(col).strip() for col in expected_features]
 
         for input_key, variations in mapping_targets.items():
@@ -92,7 +104,6 @@ def get_prediction(net_profit, total_debt, working_cap):
                 if v_clean in clean_expected:
                     actual_col_name = expected_features[clean_expected.index(v_clean)]
                     input_df.at[0, actual_col_name] = user_inputs[input_key]
-                    found_cols.append(actual_col_name)
                     break 
 
         # 4. Final alignment
@@ -104,9 +115,6 @@ def get_prediction(net_profit, total_debt, working_cap):
         
         prediction = 1 if risk_score > 0.5 else 0
 
-        # --- DEBUG LOGGING ---
-        print(f"\n--- DEBUG: Mapped: {found_cols} | Risk: {risk_score:.4f} ---")
-
         return {
             "status": "Bankrupt" if prediction == 1 else "Healthy",
             "risk_score": risk_score,
@@ -114,8 +122,6 @@ def get_prediction(net_profit, total_debt, working_cap):
         }
     except Exception as e:
         logger.error(f"Prediction Error: {e}")
-        import traceback
-        traceback.print_exc()
         return None
 
 # --- FASTAPI LIFESPAN ---
