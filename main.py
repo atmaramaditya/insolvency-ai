@@ -2,6 +2,7 @@ import logging
 import joblib
 import pandas as pd
 import numpy as np
+import os
 from typing import Dict
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -30,9 +31,13 @@ def load_assets():
     if ml_assets["model"] is None:
         try:
             logger.info("Loading ML assets...")
-            # Using standard paths
-            ml_assets["model"] = joblib.load('deployment_assets/best_ensemble.pkl')
-            ml_assets["features"] = joblib.load('deployment_assets/model_features.pkl')
+            # FIXED: Absolute pathing to prevent Errno 2 on Streamlit Cloud
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            model_path = os.path.join(base_path, 'deployment_assets', 'best_ensemble.pkl')
+            feature_path = os.path.join(base_path, 'deployment_assets', 'model_features.pkl')
+            
+            ml_assets["model"] = joblib.load(model_path)
+            ml_assets["features"] = joblib.load(feature_path)
             logger.info("Assets loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load assets: {e}")
@@ -52,15 +57,27 @@ def get_prediction(net_profit, total_debt, working_cap):
         else:
             expected_features = list(ml_assets["features"])
 
-        # 2. Initialize DataFrame with Zeros
-        input_df = pd.DataFrame(0.0, index=[0], columns=expected_features)
+        # 2. FIXED: Initialize with 0.5 (Neutral) instead of 0.0
+        # The Taiwan dataset features are largely ratios between 0 and 1. 
+        # Filling 92 features with 0.0 makes the company look "non-existent" to the model.
+        input_df = pd.DataFrame(0.5, index=[0], columns=expected_features)
 
         # 3. IMPROVED MAPPING LOGIC
-        # I've cleaned these strings to match common dataset formats (UCI/Taiwan)
         mapping_targets = {
-            "net_profit": ["Net Income to Total Assets", "ROA(C) before interest and depreciation before interest", "Persistent EPS in the Last Four Seasons"],
-            "total_debt": ["Debt ratio %", "Total debt/Total net worth", "Current Liability to Assets"],
-            "working_cap": ["Working Capital to Total Assets", "Cash/Total Assets", "Working Capital/Equity"]
+            "net_profit": [
+                " Net Income to Total Assets", 
+                "Net Income to Total Assets", 
+                "ROA(C) before interest and depreciation before interest"
+            ],
+            "total_debt": [
+                " Debt ratio %", 
+                "Debt ratio %", 
+                "Total debt/Total net worth"
+            ],
+            "working_cap": [
+                " Working Capital to Total Assets", 
+                "Working Capital to Total Assets"
+            ]
         }
         
         user_inputs = {"net_profit": net_profit, "total_debt": total_debt, "working_cap": working_cap}
@@ -73,34 +90,22 @@ def get_prediction(net_profit, total_debt, working_cap):
             for v in variations:
                 v_clean = v.strip()
                 if v_clean in clean_expected:
-                    # Find the actual index in the original expected_features list
                     actual_col_name = expected_features[clean_expected.index(v_clean)]
                     input_df.at[0, actual_col_name] = user_inputs[input_key]
                     found_cols.append(actual_col_name)
                     break 
 
-        # 4. SENSITIVITY CHECK (The "Static Value" Fix)
-        # If the model is returning a static value, it's often because 3 features 
-        # out of 95 aren't enough to move the needle. 
-        # Here we can fill "average" values for other columns if needed, 
-        # but for now, let's ensure the 3 we have are actually mapped.
-        if not found_cols:
-            logger.warning("Zero columns were successfully mapped! Check feature names.")
-
-        # 5. Inference
-        # We ensure the order is identical to training
+        # 4. Final alignment
         input_df = input_df[expected_features]
         
-        # Get probability for the "Positive" class (usually Bankrupt)
+        # 5. Inference
         probs = model.predict_proba(input_df)[0]
         risk_score = float(probs[1]) 
         
-        # Determine status
         prediction = 1 if risk_score > 0.5 else 0
 
         # --- DEBUG LOGGING ---
-        print(f"\n--- DEBUG: Input Mapped: {found_cols} ---")
-        print(f"--- DEBUG: Risk Score: {risk_score:.4f} ---")
+        print(f"\n--- DEBUG: Mapped: {found_cols} | Risk: {risk_score:.4f} ---")
 
         return {
             "status": "Bankrupt" if prediction == 1 else "Healthy",
