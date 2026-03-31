@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
+import plotly.figure_factory as ff  # Required for Confusion Matrix Heatmap
+from sklearn.metrics import confusion_matrix
 from main import get_prediction
 
 # --- 1. PAGE CONFIGURATION ---
@@ -47,20 +49,44 @@ if uploaded_file:
     
     if res and 'all_scores' in res:
         try:
-            # FIX: Using the global pandas reference explicitly to avoid AttributeError
+            # Data Cleaning & Type Formatting
             scores_raw = res.get('all_scores', [])
-            
-            # Direct conversion to ensure no nested lists interfere
             df['Risk Score'] = pd.Series(scores_raw).apply(pd.to_numeric, errors='coerce').fillna(0.0).values
-            
             df['Prediction'] = ["Bankrupt" if r > threshold else "Healthy" for r in df['Risk Score']]
             
             st.write("### Batch Analysis Results (Preview)")
             
-            # Limit data to prevent serialization/memory errors
+            # --- CONFUSION MATRIX LOGIC ---
+            # Check if the Taiwan dataset ground truth column 'Bankrupt?' exists
+            if 'Bankrupt?' in df.columns:
+                st.markdown("---")
+                st.subheader("📊 Model Performance Validation (Confusion Matrix)")
+                
+                y_true = df['Bankrupt?']
+                y_pred = [1 if r > threshold else 0 for r in df['Risk Score']]
+                cm = confusion_matrix(y_true, y_pred)
+                
+                # Plotly Annotated Heatmap
+                z = cm.tolist()
+                x = ['Predicted Healthy', 'Predicted Bankrupt']
+                y = ['Actual Healthy', 'Actual Bankrupt']
+                
+                fig_cm = ff.create_annotated_heatmap(z, x=x, y=y, colorscale='Blues', showscale=True)
+                fig_cm.update_layout(xaxis_title="Predicted Status", yaxis_title="Actual Status")
+                
+                c_a, c_b = st.columns([2, 1])
+                with c_a:
+                    st.plotly_chart(fig_cm, use_container_width=True)
+                with c_b:
+                    # Calculate Recall (Crucial for Bankruptcy)
+                    tp, fn = cm[1, 1], cm[1, 0]
+                    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+                    st.metric("Recall (Sensitivity)", f"{recall:.1%}")
+                    st.info("In insolvency detection, high **Recall** is prioritized to ensure no potential bankruptcy is missed.")
+                st.markdown("---")
+
+            # Result Preview
             preview_df = df.sort_values(by='Risk Score', ascending=False).head(50)
-            
-            # Styling
             styled_df = preview_df.style.background_gradient(subset=['Risk Score'], cmap='RdYlGn_r')
             st.dataframe(styled_df, use_container_width=True)
             
@@ -79,15 +105,14 @@ else:
     res = get_prediction(input_np, input_debt, input_wc)
     
     if res:
-        # Access safely
         risk_score = float(res.get('risk_score', 0.0))
         adj_status = "Bankrupt" if risk_score > threshold else "Healthy"
         
         tab1, tab2, tab3 = st.tabs(["🎯 Risk Diagnostic", "🧠 Explainability (XAI)", "📂 Methodology"])
 
         with tab1:
-            c1, c2 = st.columns([2, 1])
-            with c1:
+            col_a, col_b = st.columns([2, 1])
+            with col_a:
                 fig = go.Figure(go.Indicator(
                     mode = "gauge+number",
                     value = risk_score * 100,
@@ -107,7 +132,7 @@ else:
                 ))
                 st.plotly_chart(fig, use_container_width=True)
             
-            with c2:
+            with col_b:
                 st.subheader("Live Assessment")
                 st.metric("Status", adj_status)
                 st.metric("Risk Probability", f"{risk_score:.1%}")
@@ -132,11 +157,13 @@ else:
             st.subheader("Technical Documentation")
             st.markdown(f"""
             **Methodology:**
-            - Utilizing Gradient Boosting models optimized for imbalanced financial data.
-            - Real-time decision thresholding at {threshold}.
+            - **Model:** Gradient Boosting Ensemble (XGBoost/RF)
+            - **Data Handling:** Dynamic Thresholding at {threshold:.2f} to manage class imbalance.
+            - **Focus:** Minimizing Type II Errors (False Negatives).
             """)
     else:
         st.error("⚠️ Prediction Engine Offline.")
 
+# --- 6. FOOTER ---
 st.markdown("---")
 st.markdown("<p style='text-align: center; color: grey;'>© 2026 Aditya Atmaram | Navi Mumbai, India</p>", unsafe_allow_html=True)
