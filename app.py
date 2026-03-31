@@ -44,16 +44,28 @@ uploaded_file = st.file_uploader("📂 Upload Company Financials (CSV)", type="c
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
-    # Using dummy values for sliders since CSV is provided
     res = get_prediction(0, 0, 0, custom_data=df)
     
     if res:
-        # Fixed: Read from 'all_scores' for batch processing
-        df['Risk Score'] = res['all_scores']
-        df['Prediction'] = ["Bankrupt" if r > threshold else "Healthy" for r in res['all_scores']]
+        # FIX 1: Ensure Risk Score is numeric to prevent styling engine crash
+        df['Risk Score'] = pd.to_numeric(res['all_scores'], errors='coerce').fillna(0.0)
+        df['Prediction'] = ["Bankrupt" if r > threshold else "Healthy" for r in df['Risk Score']]
         
-        st.write("### Batch Analysis Results")
-        st.dataframe(df.style.background_gradient(subset=['Risk Score'], cmap='RdYlGn_r'), width="stretch")
+        st.write("### Batch Analysis Results (Preview)")
+        
+        # FIX 2: Limit data serialization to prevent Arrow Marshalling error
+        # We show the top 50 high-risk entities first
+        try:
+            preview_df = df.sort_values(by='Risk Score', ascending=False).head(50)
+            styled_df = preview_df.style.background_gradient(subset=['Risk Score'], cmap='RdYlGn_r')
+            st.dataframe(styled_df, use_container_width=True)
+            
+            # Add Download Button for full dataset
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Download Full Assessment Report", data=csv, file_name="insolvency_analysis.csv")
+        except Exception as e:
+            st.warning("Styling failed due to data scale. Showing raw preview.")
+            st.dataframe(df.head(50), use_container_width=True)
     else:
         st.error("Prediction failed for the uploaded file.")
 
@@ -62,7 +74,6 @@ else:
     res = get_prediction(input_np, input_debt, input_wc)
     
     if res:
-        # FIX: Access the score safely (ensuring it's treated as a float)
         risk_score = float(res['risk_score'])
         adj_status = "Bankrupt" if risk_score > threshold else "Healthy"
         
@@ -72,7 +83,6 @@ else:
         with tab1:
             c1, c2 = st.columns([2, 1])
             with c1:
-                # Re-integrating your Gauge Chart
                 fig = go.Figure(go.Indicator(
                     mode = "gauge+number",
                     value = risk_score * 100,
@@ -90,7 +100,7 @@ else:
                             'value': threshold * 100}
                     }
                 ))
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True)
             
             with c2:
                 st.subheader("Live Assessment")
@@ -111,7 +121,7 @@ else:
                 })
                 fig_bar = px.bar(impact_df, x='Input Value', y='Financial Factor', orientation='h', 
                                  color='Input Value', color_continuous_scale='RdYlGn_r')
-                st.plotly_chart(fig_bar, width="stretch")
+                st.plotly_chart(fig_bar, use_container_width=True)
 
         with tab3:
             st.subheader("Technical Documentation")
