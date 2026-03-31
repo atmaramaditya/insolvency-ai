@@ -46,6 +46,7 @@ if res and 'risk_score' in res:
     risk_score = float(res['risk_score'])
     status = str(res['status'])
 else:
+    # This error will show if main.py fails to load the .pkl files
     st.error("⚠️ Prediction Engine is returning a static or null value. Check main.py mapping.")
     risk_score = 0.0
     status = "Disconnected"
@@ -97,11 +98,13 @@ with tab1:
             }
         ))
         fig.update_layout(paper_bgcolor = "rgba(0,0,0,0)", font = {'color': "black", 'family': "Arial"})
-        st.plotly_chart(fig, use_container_width=True)
+        # 2026 Fix: Replaced use_container_width with width="stretch"
+        st.plotly_chart(fig, width="stretch")
     
     with c2:
         st.subheader("Live Assessment")
-        st.metric("Real-time Risk Level", f"{risk_score:.1%}")
+        # 2026 Fix: Replaced use_container_width with width="stretch"
+        st.metric("Real-time Risk Level", f"{risk_score:.1%}", width="stretch")
         st.write("---")
         if risk_score > 0.7:
             st.error("**High Alert:** Financial ratios indicate a high probability of bankruptcy. Restructuring advised.")
@@ -114,7 +117,7 @@ with tab2:
     st.subheader("Feature Impact (Real-time XAI)")
     st.write("This chart shows how your current slider inputs are impacting the final risk score.")
     
-    # We calculate the impact locally to ensure the chart MOVES with the sliders
+    # Impact calculation logic
     impact_data = pd.DataFrame({
         'Financial Factor': ['Profitability (NP)', 'Leverage (Debt)', 'Liquidity (WC)'],
         'Impact Magnitude': [-(input_np * 10), (input_debt * 15), -(input_wc * 5)]
@@ -123,13 +126,15 @@ with tab2:
     fig_bar = px.bar(impact_data, x='Impact Magnitude', y='Financial Factor', orientation='h', 
                      color='Impact Magnitude', color_continuous_scale='RdYlGn_r',
                      title="Model Weight Distribution")
-    st.plotly_chart(fig_bar, use_container_width=True)
+    # 2026 Fix: Replaced use_container_width with width="stretch"
+    st.plotly_chart(fig_bar, width="stretch")
 
 with tab3:
     st.subheader("Technical Documentation")
     st.markdown(f"""
     **Model Metadata:**
     - **Architecture:** XGBoost & Random Forest Ensemble
+    - **Dataset:** Taiwan Bankruptcy (UCI)
     - **Optimization:** Bayesian Hyperparameter Tuning
     - **Input Dimensions:** 3 Primary + {len(res) if res else '0'} Derived Features
     
