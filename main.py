@@ -15,13 +15,12 @@ logger = logging.getLogger("bankruptcy_api")
 # Global dictionary to store the model and features
 ml_assets = {"model": None, "features": None}
 
-# --- 2. ASSET LOADING (Defined BEFORE get_prediction) ---
+# --- 2. ASSET LOADING ---
 def load_assets():
     """Loads ML models if they are not already in memory."""
     if ml_assets["model"] is not None:
         return True
 
-    # Check multiple possible paths (Local vs. Streamlit Cloud)
     base_dir = os.path.dirname(__file__)
     model_paths = [
         'deployment_assets/best_ensemble.pkl',
@@ -34,14 +33,12 @@ def load_assets():
     ]
 
     try:
-        # Load Model
         for p in model_paths:
             if os.path.exists(p):
                 ml_assets["model"] = joblib.load(p)
                 logger.info(f"✅ Model loaded from: {p}")
                 break
         
-        # Load Feature List
         for fp in feature_paths:
             if os.path.exists(fp):
                 ml_assets["features"] = joblib.load(fp)
@@ -56,26 +53,25 @@ def load_assets():
 
 # --- 3. PREDICTION LOGIC ---
 def get_prediction(net_profit, total_debt, working_cap, custom_data: Optional[pd.DataFrame] = None):
-    # This call now works because load_assets is defined above
     if not load_assets():
         return None
 
     try:
         model = ml_assets["model"]
-        # Handle different model types (XGBoost vs Sklearn)
         if hasattr(model, "feature_names_in_"):
             expected_features = list(model.feature_names_in_)
         else:
             expected_features = list(ml_assets["features"])
 
-        # Create base dataframe with neutral imputation (Taiwan Dataset standard is often 0.5 for scaled data)
+        # DATA ALIGNMENT LOGIC
         if custom_data is not None:
+            # Reindex ensures that if the CSV has all 95 features, they match perfectly.
+            # If features are missing, they are filled with 0.5 (neutral scaled value).
             input_df = custom_data.reindex(columns=expected_features, fill_value=0.5)
         else:
+            # Manual slider input logic
             input_df = pd.DataFrame(0.5, index=[0], columns=expected_features)
             
-            # Mapping logic with the exact Taiwan Dataset Column Strings
-            # NOTE: These names MUST match your training data exactly (including spaces)
             mapping = {
                 " Net Income to Total Assets": net_profit,
                 " Debt ratio %": total_debt,
@@ -86,17 +82,21 @@ def get_prediction(net_profit, total_debt, working_cap, custom_data: Optional[pd
                 if col in expected_features:
                     input_df.at[0, col] = val
                 elif col.strip() in [c.strip() for c in expected_features]:
-                    # Fallback for slight naming mismatches
                     actual_col = [c for c in expected_features if c.strip() == col.strip()][0]
                     input_df.at[0, actual_col] = val
 
-        # Ensure correct column order
+        # Ensure correct column order for the model
         input_df = input_df[expected_features]
 
         # INFERENCE
         probs = model.predict_proba(input_df)
         risk_scores = probs[:, 1]
         
+        # --- NEW: EXTRACT TRUE LABELS FOR CONFUSION MATRIX ---
+        true_labels = None
+        if custom_data is not None and 'Bankrupt?' in custom_data.columns:
+            true_labels = custom_data['Bankrupt?'].tolist()
+
         # Explanation logic for the dashboard
         feature_importance = {
             "Profitability": net_profit,
@@ -107,14 +107,15 @@ def get_prediction(net_profit, total_debt, working_cap, custom_data: Optional[pd
         return {
             "status": "Bankrupt" if risk_scores[0] > 0.5 else "Healthy",
             "risk_score": float(risk_scores[0]),
-            "all_scores": risk_scores.tolist(), # For batch processing
+            "all_scores": risk_scores.tolist(),
+            "true_labels": true_labels, # Crucial for the app.py Performance tab
             "explanations": feature_importance
         }
     except Exception as e:
         logger.error(f"Prediction Error: {e}")
         return None
 
-# --- 4. FASTAPI SETUP (For API Deployment) ---
+# --- 4. FASTAPI SETUP ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_assets()
